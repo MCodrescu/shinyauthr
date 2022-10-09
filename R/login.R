@@ -9,6 +9,7 @@
 #' @param login_title label for the login button
 #' @param login_btn_class bootstrap class for the login button. defaults to "btn-primary"
 #' @param error_message message to display after failed login
+#' @param error_as_notification display the error message using shiny notification UI
 #' @param additional_ui additional shiny UI element(s) to add below login button. Wrap multiple inside \code{shiny::tagList()}
 #' @param cookie_expiry number of days to request browser to retain login cookie
 #'
@@ -22,10 +23,11 @@ loginUI <- function(id,
                     login_title = "Log in",
                     login_btn_class = "btn-primary",
                     error_message = "Invalid username or password!",
+                    error_as_notification = FALSE,
                     additional_ui = NULL,
                     cookie_expiry = 7) {
   ns <- shiny::NS(id)
-
+  
   shinyjs::hidden(
     shiny::div(
       id = ns("panel"),
@@ -134,7 +136,7 @@ loginServer <- function(id,
         if (cookie_logins) {
           shinyjs::js$rmcookie()
         }
-
+        
         if (reload_on_logout) {
           session$reload()
         } else {
@@ -234,8 +236,14 @@ loginServer <- function(id,
           }
           
         } else { # if not valid temporarily show error message to user
-          shinyjs::toggle(id = "error", anim = TRUE, time = 1, animType = "fade")
-          shinyjs::delay(5000, shinyjs::toggle(id = "error", anim = TRUE, time = 1, animType = "fade"))
+          if (error_as_notification){
+            shiny::showNotification(
+              error_message
+            )
+          } else{
+            shinyjs::toggle(id = "error", anim = TRUE, time = 1, animType = "fade")
+            shinyjs::delay(5000, shinyjs::toggle(id = "error", anim = TRUE, time = 1, animType = "fade"))
+          }
         }
       })
       
@@ -325,12 +333,12 @@ login <- function(input,
       call. = FALSE
     )
   }
-
+  
   credentials <- shiny::reactiveValues(user_auth = FALSE, info = NULL, cookie_already_checked = FALSE)
-
+  
   shiny::observeEvent(log_out(), {
     shinyjs::js$rmcookie()
-
+    
     if (reload_on_logout) {
       session$reload()
     } else {
@@ -339,7 +347,7 @@ login <- function(input,
       credentials$info <- NULL
     }
   })
-
+  
   shiny::observe({
     if (credentials$user_auth) {
       shinyjs::hide(id = "panel")
@@ -347,10 +355,10 @@ login <- function(input,
       shinyjs::show(id = "panel")
     }
   })
-
+  
   users <- dplyr::enquo(user_col)
   pwds <- dplyr::enquo(pwd_col)
-
+  
   if (missing(cookie_getter) | missing(cookie_setter) | missing(sessionid_col)) {
     cookie_getter <- default_cookie_getter(dplyr::as_label(users), "session_id")
     cookie_setter <- default_cookie_setter
@@ -358,10 +366,10 @@ login <- function(input,
   } else {
     sessionids <- dplyr::enquo(sessionid_col)
   }
-
+  
   # ensure all text columns are character class
   data <- dplyr::mutate_if(data, is.factor, as.character)
-
+  
   # possibility 1: login through a present valid cookie
   # first, check for a cookie once javascript is ready
   shiny::observeEvent(shiny::isTruthy(shinyjs::js$getcookie()), {
@@ -370,29 +378,29 @@ login <- function(input,
   # second, once cookie is found try to use it
   shiny::observeEvent(input$jscookie, {
     credentials$cookie_already_checked <- TRUE
-
+    
     # if already logged in or cookie missing, ignore change in input$jscookie
     shiny::req(
       credentials$user_auth == FALSE,
       is.null(input$jscookie) == FALSE,
       nchar(input$jscookie) > 0
     )
-
+    
     cookie_data <- dplyr::filter(cookie_getter(), !!sessionids == input$jscookie)
-
+    
     if (nrow(cookie_data) != 1) {
       shinyjs::js$rmcookie()
     } else {
       # if valid cookie, we reset it to update expiry date
       .userid <- dplyr::pull(cookie_data, !!users)
       .sessionid <- randomString()
-
+      
       shinyjs::js$setcookie(.sessionid)
-
+      
       cookie_setter(.userid, .sessionid)
-
+      
       cookie_data <- utils::head(dplyr::filter(cookie_getter(), !!sessionids == .sessionid, !!users == .userid))
-
+      
       credentials$user_auth <- TRUE
       credentials$info <- dplyr::bind_cols(
         dplyr::filter(data, !!users == .userid),
@@ -400,13 +408,13 @@ login <- function(input,
       )
     }
   })
-
+  
   # possibility 2: login through login button
   shiny::observeEvent(input$button, {
-
+    
     # check for match of input username to username column in data
     row_username <- which(dplyr::pull(data, !!users) == input$user_name)
-
+    
     if (length(row_username)) {
       row_password <- dplyr::filter(data, dplyr::row_number() == row_username)
       row_password <- dplyr::pull(row_password, !!pwds)
@@ -418,19 +426,19 @@ login <- function(input,
     } else {
       password_match <- FALSE
     }
-
+    
     # if user name row and password name row are same, credentials are valid
     if (length(row_username) == 1 && password_match) {
       .sessionid <- randomString()
       shinyjs::js$setcookie(.sessionid)
-
+      
       cookie_setter(input$user_name, .sessionid)
-
+      
       cookie_data <- dplyr::filter(dplyr::select(cookie_getter(), -!!users), !!sessionids == .sessionid)
-
+      
       credentials$user_auth <- TRUE
       credentials$info <- dplyr::filter(data, !!users == input$user_name)
-
+      
       if (nrow(cookie_data) == 1) {
         credentials$info <- dplyr::bind_cols(credentials$info, cookie_data)
       }
@@ -439,7 +447,7 @@ login <- function(input,
       shinyjs::delay(5000, shinyjs::toggle(id = "error", anim = TRUE, time = 1, animType = "fade"))
     }
   })
-
+  
   # return reactive list containing auth boolean and user information
   shiny::reactive({
     shiny::reactiveValuesToList(credentials)
